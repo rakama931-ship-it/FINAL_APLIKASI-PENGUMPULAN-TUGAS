@@ -1,0 +1,675 @@
+from kivy.app import App
+from kivy.config import Config
+from kivy.metrics import dp
+from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from kivy.graphics import Color, RoundedRectangle
+from kivy.clock import Clock
+import sqlite3
+
+Config.set("graphics", "width", "420")
+Config.set("graphics", "height", "800")
+Config.set("graphics", "resizable", "0")
+
+# ============================================================
+# THEME
+# ============================================================
+BG = (0.95, 0.97, 1, 1)
+WHITE = (1, 1, 1, 1)
+BLUE = (0.10, 0.35, 0.78, 1)
+BLUE_DARK = (0.06, 0.24, 0.58, 1)
+GREEN = (0.10, 0.62, 0.34, 1)
+ORANGE = (0.94, 0.56, 0.12, 1)
+RED = (0.82, 0.18, 0.18, 1)
+TEXT = (0.10, 0.13, 0.18, 1)
+GRAY = (0.43, 0.47, 0.54, 1)
+LIGHT_BLUE = (0.89, 0.94, 1, 1)
+LIGHT_GREEN = (0.90, 0.97, 0.93, 1)
+LIGHT_ORANGE = (1, 0.96, 0.88, 1)
+LIGHT_RED = (1, 0.92, 0.92, 1)
+
+
+def rounded_bg(widget, color=WHITE, radius=16):
+    with widget.canvas.before:
+        Color(*color)
+        widget._bg = RoundedRectangle(
+            pos=widget.pos,
+            size=widget.size,
+            radius=[dp(radius)]
+        )
+    widget.bind(
+        pos=lambda w, v: setattr(w._bg, "pos", v),
+        size=lambda w, v: setattr(w._bg, "size", v),
+    )
+
+
+def page_bg(widget):
+    with widget.canvas.before:
+        Color(*BG)
+        widget._page_bg = RoundedRectangle(
+            pos=widget.pos,
+            size=widget.size,
+            radius=[0]
+        )
+    widget.bind(
+        pos=lambda w, v: setattr(w._page_bg, "pos", v),
+        size=lambda w, v: setattr(w._page_bg, "size", v),
+    )
+
+
+def button(text, color=BLUE, height=52, font_size=14):
+    b = Button(
+        text=text,
+        size_hint_y=None,
+        height=dp(height),
+        background_normal="",
+        background_color=color,
+        color=WHITE,
+        font_size=f"{font_size}sp",
+        bold=True,
+    )
+    return b
+
+
+def label(text="", size=14, color=TEXT, bold=False, halign="left"):
+    return Label(
+        text=text,
+        color=color,
+        font_size=f"{size}sp",
+        bold=bold,
+        halign=halign,
+        valign="middle",
+    )
+
+
+def card(color=WHITE, height=None, padding=14, spacing=8):
+    box = BoxLayout(
+        orientation="vertical",
+        padding=dp(padding),
+        spacing=dp(spacing),
+        size_hint_y=None if height else 1,
+    )
+    if height:
+        box.height = dp(height)
+    rounded_bg(box, color)
+    return box
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+class Database:
+    def __init__(self):
+        self.connection = sqlite3.connect("portal_belajar.db")
+        self.create_tables()
+
+    def create_tables(self):
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS tugas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nama_siswa TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Terkirim',
+                nilai INTEGER DEFAULT NULL,
+                judul_tugas TEXT DEFAULT 'Tugas',
+                komentar TEXT DEFAULT ''
+            )
+        """)
+
+        columns = {
+            row[1] for row in
+            self.connection.execute("PRAGMA table_info(tugas)").fetchall()
+        }
+
+        if "judul_tugas" not in columns:
+            self.connection.execute(
+                "ALTER TABLE tugas ADD COLUMN judul_tugas TEXT DEFAULT 'Tugas'"
+            )
+
+        if "komentar" not in columns:
+            self.connection.execute(
+                "ALTER TABLE tugas ADD COLUMN komentar TEXT DEFAULT ''"
+            )
+
+        self.connection.commit()
+
+    def add_task(self, name, repository, title="Tugas"):
+        cur = self.connection.execute(
+            """INSERT INTO tugas
+               (nama_siswa, repository, status, judul_tugas, komentar)
+               VALUES (?, ?, 'Terkirim', ?, '')""",
+            (name, repository, title),
+        )
+        self.connection.commit()
+        return cur.lastrowid
+
+    def get_all_tasks(self):
+        return self.connection.execute(
+            """SELECT id, nama_siswa, repository, status, nilai,
+                      judul_tugas, komentar
+               FROM tugas ORDER BY id DESC"""
+        ).fetchall()
+
+    def get_task(self, task_id):
+        return self.connection.execute(
+            """SELECT id, nama_siswa, repository, status, nilai,
+                      judul_tugas, komentar
+               FROM tugas WHERE id=?""",
+            (task_id,),
+        ).fetchone()
+
+    def get_student_tasks(self, name):
+        return self.connection.execute(
+            """SELECT id, nama_siswa, repository, status, nilai,
+                      judul_tugas, komentar
+               FROM tugas WHERE nama_siswa=? ORDER BY id DESC""",
+            (name,),
+        ).fetchall()
+
+    def update_score(self, task_id, score, comment):
+        self.connection.execute(
+            """UPDATE tugas
+               SET nilai=?, status='Dinilai', komentar=?
+               WHERE id=?""",
+            (score, comment, task_id),
+        )
+        self.connection.commit()
+
+    def statistics(self):
+        total = self.connection.execute(
+            "SELECT COUNT(*) FROM tugas"
+        ).fetchone()[0]
+
+        graded = self.connection.execute(
+            "SELECT COUNT(*) FROM tugas WHERE nilai IS NOT NULL"
+        ).fetchone()[0]
+
+        average = self.connection.execute(
+            "SELECT AVG(nilai) FROM tugas WHERE nilai IS NOT NULL"
+        ).fetchone()[0]
+
+        return total, graded, average
+
+    def close(self):
+        self.connection.close()
+
+
+# ============================================================
+# BASE SCREEN
+# ============================================================
+class BaseScreen(Screen):
+    def go(self, name, direction="left"):
+        self.manager.transition = SlideTransition(
+            direction=direction,
+            duration=0.18
+        )
+        self.manager.current = name
+
+    def on_pre_enter(self, *args):
+        pass
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+class LoginScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(28),
+            spacing=dp(12)
+        )
+        page_bg(root)
+
+        root.add_widget(label("📚", 48, BLUE, True, "center"))
+        root.add_widget(label("PORTAL TUGAS", 27, BLUE, True, "center"))
+        root.add_widget(label(
+            "Kumpulkan, nilai, dan pantau tugas\n"
+            "lebih mudah dalam satu aplikasi.",
+            13, GRAY, False, "center"
+        ))
+
+        role_box = BoxLayout(
+            size_hint_y=None,
+            height=dp(48),
+            spacing=dp(8)
+        )
+
+        self.student_role = button("SISWA", BLUE, 48, 13)
+        self.teacher_role = button("GURU", GRAY, 48, 13)
+
+        self.student_role.bind(
+            on_press=lambda *_: self.select_role("siswa")
+        )
+        self.teacher_role.bind(
+            on_press=lambda *_: self.select_role("guru")
+        )
+
+        role_box.add_widget(self.student_role)
+        role_box.add_widget(self.teacher_role)
+        root.add_widget(role_box)
+
+        root.add_widget(label("Username", 12, TEXT, True))
+
+        self.username = TextInput(
+            hint_text="Masukkan username",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(50),
+            padding=[dp(14), dp(14)],
+        )
+        root.add_widget(self.username)
+
+        root.add_widget(label("Password", 12, TEXT, True))
+
+        self.password = TextInput(
+            hint_text="Masukkan password",
+            password=True,
+            multiline=False,
+            size_hint_y=None,
+            height=dp(50),
+            padding=[dp(14), dp(14)],
+        )
+        root.add_widget(self.password)
+
+        self.message = label("", 12, RED, True, "center")
+        root.add_widget(self.message)
+
+        login_btn = button("MASUK", BLUE, 56, 15)
+        login_btn.bind(on_press=self.login)
+        root.add_widget(login_btn)
+
+        root.add_widget(label(
+            "Demo akun\nGuru: guru / guru123\nSiswa: siswa / siswa123",
+            11, GRAY, False, "center"
+        ))
+
+        self.add_widget(root)
+        self.role = "siswa"
+        self.select_role("siswa")
+
+    def select_role(self, role):
+        self.role = role
+
+        if role == "siswa":
+            self.student_role.background_color = BLUE
+            self.teacher_role.background_color = GRAY
+        else:
+            self.student_role.background_color = GRAY
+            self.teacher_role.background_color = BLUE
+
+        self.message.text = ""
+
+    def login(self, *_):
+        u = self.username.text.strip()
+        p = self.password.text.strip()
+
+        if self.role == "guru" and u == "guru" and p == "guru123":
+            self.manager.user_role = "guru"
+            self.username.text = ""
+            self.password.text = ""
+            self.go("teacher_dashboard")
+
+        elif self.role == "siswa" and u == "siswa" and p == "siswa123":
+            self.manager.user_role = "siswa"
+            self.manager.student_name = "Siswa"
+            self.username.text = ""
+            self.password.text = ""
+            self.go("student_dashboard")
+
+        else:
+            self.message.text = (
+                "Login tidak sesuai dengan role yang dipilih."
+            )
+
+
+# ============================================================
+# STUDENT DASHBOARD
+# ============================================================
+class StudentDashboardScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(18),
+            spacing=dp(12)
+        )
+        page_bg(root)
+
+        top = BoxLayout(
+            size_hint_y=None,
+            height=dp(72),
+            spacing=dp(10)
+        )
+        top.add_widget(label("📚", 32, BLUE, True, "center"))
+
+        info = BoxLayout(orientation="vertical")
+        info.add_widget(label("Portal Tugas", 21, TEXT, True))
+        self.welcome = label("Selamat datang, Siswa", 12, GRAY)
+        info.add_widget(self.welcome)
+        top.add_widget(info)
+        root.add_widget(top)
+
+        self.summary = BoxLayout(
+            size_hint_y=None,
+            height=dp(92),
+            spacing=dp(8)
+        )
+        root.add_widget(self.summary)
+
+        root.add_widget(label("Menu Siswa", 17, TEXT, True))
+
+        submit = button("➕  KUMPULKAN TUGAS", BLUE, 58, 14)
+        submit.bind(on_press=lambda *_: self.go("submit_name"))
+        history = button("📋  RIWAYAT & NILAI", GREEN, 58, 14)
+        history.bind(on_press=lambda *_: self.go("student_history"))
+
+        root.add_widget(submit)
+        root.add_widget(history)
+
+        logout = button("KELUAR", RED, 48, 13)
+        logout.bind(on_press=self.logout)
+        root.add_widget(logout)
+
+        self.add_widget(root)
+
+    def refresh(self):
+        name = self.manager.student_name or "Siswa"
+        self.welcome.text = f"Halo, {name} 👋"
+        self.summary.clear_widgets()
+
+        rows = self.manager.database.get_student_tasks(name)
+        total = len(rows)
+        graded = sum(1 for r in rows if r[4] is not None)
+        waiting = total - graded
+
+        for icon, title, value, color in [
+            ("📚", "Terkirim", total, BLUE),
+            ("✓", "Dinilai", graded, GREEN),
+            ("⏳", "Menunggu", waiting, ORANGE),
+        ]:
+            c = card(WHITE, 92, 8, 2)
+            c.add_widget(label(icon, 22, color, True, "center"))
+            c.add_widget(label(str(value), 20, TEXT, True, "center"))
+            c.add_widget(label(title, 10, GRAY, False, "center"))
+            self.summary.add_widget(c)
+
+    def on_pre_enter(self, *args):
+        self.refresh()
+
+    def logout(self, *_):
+        self.manager.user_role = None
+        self.manager.student_name = ""
+        self.go("login", "right")
+
+
+# ============================================================
+# STUDENT: NAME + SUBMISSION
+# ============================================================
+class SubmitNameScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(25),
+            spacing=dp(12)
+        )
+        page_bg(root)
+
+        root.add_widget(label(
+            "KUMPULKAN TUGAS", 24, BLUE, True, "center"
+        ))
+        root.add_widget(label(
+            "Langkah 1 dari 2", 12, GRAY, False, "center"
+        ))
+        root.add_widget(label("Nama siswa", 12, TEXT, True))
+
+        self.name_input = TextInput(
+            text="",
+            hint_text="Nama lengkap",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(52),
+            padding=[dp(14), dp(14)],
+        )
+        root.add_widget(self.name_input)
+
+        self.message = label("", 12, RED, True, "center")
+        root.add_widget(self.message)
+
+        nxt = button("LANJUT", BLUE, 54, 14)
+        nxt.bind(on_press=self.next_step)
+        root.add_widget(nxt)
+
+        back = button("KEMBALI", GRAY, 48, 13)
+        back.bind(
+            on_press=lambda *_: self.go("student_dashboard", "right")
+        )
+        root.add_widget(back)
+
+        self.add_widget(root)
+
+    def on_pre_enter(self, *args):
+        self.name_input.text = self.manager.student_name or ""
+        self.message.text = ""
+
+    def next_step(self, *_):
+        name = self.name_input.text.strip()
+
+        if not name:
+            self.message.text = "Nama siswa wajib diisi."
+            return
+
+        self.manager.student_name = name
+        self.go("submit_repo")
+
+
+class SubmitRepoScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(25),
+            spacing=dp(12)
+        )
+        page_bg(root)
+
+        root.add_widget(label(
+            "DETAIL TUGAS", 24, BLUE, True, "center"
+        ))
+        root.add_widget(label(
+            "Langkah 2 dari 2", 12, GRAY, False, "center"
+        ))
+
+        root.add_widget(label("Judul tugas", 12, TEXT, True))
+        self.title_input = TextInput(
+            hint_text="Contoh: Tugas Python",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(52),
+            padding=[dp(14), dp(14)],
+        )
+        root.add_widget(self.title_input)
+
+        root.add_widget(label(
+            "Link repository / tugas", 12, TEXT, True
+        ))
+        self.repo_input = TextInput(
+            hint_text="Tempel link tugas di sini",
+            multiline=True,
+            size_hint_y=None,
+            height=dp(110),
+            padding=[dp(14), dp(14)],
+        )
+        root.add_widget(self.repo_input)
+
+        self.message = label("", 12, RED, True, "center")
+        root.add_widget(self.message)
+
+        send = button("KIRIM TUGAS", GREEN, 56, 14)
+        send.bind(on_press=self.submit)
+        root.add_widget(send)
+
+        back = button("KEMBALI", GRAY, 48, 13)
+        back.bind(on_press=lambda *_: self.go("submit_name", "right"))
+        root.add_widget(back)
+
+        self.add_widget(root)
+
+    def on_pre_enter(self, *args):
+        self.title_input.text = ""
+        self.repo_input.text = ""
+        self.message.text = ""
+
+    def submit(self, *_):
+        title = self.title_input.text.strip() or "Tugas"
+        repo = self.repo_input.text.strip()
+
+        if not repo:
+            self.message.text = "Link tugas wajib diisi."
+            return
+
+        self.manager.database.add_task(
+            self.manager.student_name,
+            repo,
+            title
+        )
+        self.go("success")
+
+
+# ============================================================
+# SUBMISSION SUCCESS
+# ============================================================
+class SuccessScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(28),
+            spacing=dp(15)
+        )
+        page_bg(root)
+
+        root.add_widget(label("✓", 64, GREEN, True, "center"))
+        root.add_widget(label(
+            "TUGAS BERHASIL DIKIRIM", 23, GREEN, True, "center"
+        ))
+        root.add_widget(label(
+            "Pengumpulan tugas kamu sudah tersimpan.",
+            14, GRAY, False, "center"
+        ))
+
+        history = button("LIHAT RIWAYAT & NILAI", BLUE, 54, 13)
+        history.bind(on_press=lambda *_: self.go("student_history"))
+        root.add_widget(history)
+
+        home = button("KEMBALI KE MENU SISWA", GRAY, 50, 13)
+        home.bind(
+            on_press=lambda *_: self.go("student_dashboard", "right")
+        )
+        root.add_widget(home)
+
+        self.add_widget(root)
+
+
+# ============================================================
+# STUDENT HISTORY
+# ============================================================
+class StudentHistoryScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(orientation="vertical")
+        page_bg(root)
+
+        header = BoxLayout(
+            size_hint_y=None,
+            height=dp(65),
+            padding=dp(8)
+        )
+        back = button("‹", BLUE_DARK, 48, 22)
+        back.size_hint_x = None
+        back.width = dp(52)
+        back.bind(
+            on_press=lambda *_: self.go("student_dashboard", "right")
+        )
+        header.add_widget(back)
+        header.add_widget(label("Riwayat & Nilai", 19, WHITE, True, "center"))
+        root.add_widget(header)
+
+        scroll = ScrollView()
+        self.container = BoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=dp(15),
+            size_hint_y=None
+        )
+        self.container.bind(
+            minimum_height=self.container.setter("height")
+        )
+        scroll.add_widget(self.container)
+        root.add_widget(scroll)
+
+        self.add_widget(root)
+
+    def on_pre_enter(self, *args):
+        self.load_history()
+
+    def load_history(self):
+        self.container.clear_widgets()
+        name = self.manager.student_name or "Siswa"
+        tasks = self.manager.database.get_student_tasks(name)
+
+        if not tasks:
+            self.container.add_widget(label(
+                "Belum ada tugas yang dikumpulkan.",
+                14, GRAY, False, "center"
+            ))
+            return
+
+        for task in tasks:
+            task_id, student, repo, status, score, title, comment = task
+
+            c = card(WHITE, 190, 13, 6)
+            c.add_widget(label(title or "Tugas", 16, TEXT, True))
+            c.add_widget(label(f"Status: {status}", 12, BLUE, True))
+
+            score_text = (
+                str(score) if score is not None else "Belum dinilai"
+            )
+            c.add_widget(label(
+                f"Nilai: {score_text}",
+                14,
+                GREEN if score is not None else ORANGE,
+                True
+            ))
+
+            c.add_widget(label(
+                f"Komentar guru: {comment or '-'}",
+                12, GRAY
+            ))
+            c.add_widget(label(repo, 10, BLUE))
+            self.container.add_widget(c)
+
+
+# ============================================================
+# TEACHER DASHBOARD
+# ============================================================
+class TeacherDashboardScreen(BaseScreen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        root = BoxLayout(
+            orientation="vertical",
+    
